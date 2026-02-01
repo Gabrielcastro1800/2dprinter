@@ -23,6 +23,8 @@ const frameDelayNumberEl = () => document.getElementById('frameDelayNumber');
 const progressEl = () => document.getElementById('progress');
 const colorModeEl = () => document.getElementById('colorMode');
 const paletteCountEl = () => document.getElementById('paletteCount');
+const clearBetweenEl = () => document.getElementById('clearBetween');
+const nextClusterBtn = () => document.getElementById('nextCluster');
 
 function syncControls() {
   const s = pixelsPerFrameEl();
@@ -166,12 +168,9 @@ imagee.onload = function () {
         else if (g >= r && g >= b) dominantLists.green.push(p);
         else dominantLists.blue.push(p);
       }
-      // compute palette clusters (number from UI, default 20)
-      const k2 = parseInt(paletteCountEl()?.value || 20, 10) || 20;
-      computePaletteClusters(k2);
-      // compute palette clusters (number from UI, default 20)
-      const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
-      computePaletteClusters(k);
+  // compute palette clusters (number from UI, default 20)
+  const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
+  computePaletteClusters(k);
   } catch (err) {
     console.error('Failed to read image pixel data (canvas tainted):', err);
     showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
@@ -217,6 +216,8 @@ function printer2d() {
       // move to next cluster and finish this frame
       clusterPass++;
       clusterPos = 0;
+      // if user wants the canvas cleared between clusters, do it now so next cluster appears alone
+      if (clearBetweenEl()?.checked) ctx.clearRect(0, 0, canvas.width, canvas.height);
       // do not proceed to next cluster in the same frame
     } else {
       const toDraw = Math.min(pixelsPerFrame, remaining);
@@ -231,6 +232,8 @@ function printer2d() {
         clusterPos++;
       }
     }
+    // enable/disable Next button appropriately
+    if (nextClusterBtn()) nextClusterBtn().disabled = false;
   } else {
     for (let p = 0; p < pixelsPerFrame; p++) {
       if (mode === 'dominant' && dominantLists) {
@@ -352,6 +355,9 @@ function loadImageFromUrl(url) {
         else if (g >= r && g >= b) dominantLists.green.push(p);
         else dominantLists.blue.push(p);
       }
+      // compute palette clusters (number from UI, default 20)
+      const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
+      computePaletteClusters(k);
     } catch (err) {
       console.error('Failed to read image pixel data (canvas tainted):', err);
       showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
