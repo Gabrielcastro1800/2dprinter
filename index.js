@@ -170,11 +170,110 @@ function buildIndexOrder() {
   indexOrderPos = 0;
 }
 
+// Adjust the displayed canvas CSS size so small images are easier to see while
+// preserving the internal canvas resolution (canvas.width/height). Call with
+// the image's intrinsic width/height (or canvas.width/height).
+function adjustCanvasDisplaySize(imgW, imgH) {
+  const minDisplayWidth = 300; // don't let the displayed canvas get narrower than this
+  if (imgW <= 0 || imgH <= 0) return;
+  if (imgW < minDisplayWidth) {
+    const scale = minDisplayWidth / imgW;
+    canvas.style.width = Math.round(imgW * scale) + 'px';
+    canvas.style.height = Math.round(imgH * scale) + 'px';
+  } else {
+    // reset any previous scaling
+    canvas.style.width = imgW + 'px';
+    canvas.style.height = imgH + 'px';
+  }
+}
+
+// Fit the canvas to the fullscreen window while preserving aspect ratio.
+function fitCanvasToScreen() {
+  if (!canvas) return;
+  const cw = canvas.width;
+  const ch = canvas.height;
+  if (!cw || !ch) return;
+  const scale = Math.min(window.innerWidth / cw, window.innerHeight / ch);
+  canvas.style.width = Math.round(cw * scale) + 'px';
+  canvas.style.height = Math.round(ch * scale) + 'px';
+}
+
+function isFullScreen() {
+  return !!(document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement);
+}
+
+function enterFullScreen() {
+  if (canvas.requestFullscreen) canvas.requestFullscreen();
+  else if (canvas.webkitRequestFullscreen) canvas.webkitRequestFullscreen();
+  else if (canvas.mozRequestFullScreen) canvas.mozRequestFullScreen();
+  else if (canvas.msRequestFullscreen) canvas.msRequestFullscreen();
+  // fit once entering fullscreen (will also be called on fullscreenchange)
+  setTimeout(fitCanvasToScreen, 50);
+}
+
+function exitFullScreen() {
+  if (document.exitFullscreen) document.exitFullscreen();
+  else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+  else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+  else if (document.msExitFullscreen) document.msExitFullscreen();
+}
+
+function toggleFullScreen() {
+  if (isFullScreen()) exitFullScreen();
+  else enterFullScreen();
+}
+
+function updateFullscreenButton() {
+  const btn = document.getElementById('fullscreenToggle');
+  if (!btn) return;
+  if (isFullScreen()) btn.textContent = 'Exit fullscreen';
+  else btn.textContent = 'Enter fullscreen';
+}
+
+// keep button label in sync when user exits with ESC or other means
+document.addEventListener('fullscreenchange', () => {
+  if (isFullScreen()) fitCanvasToScreen();
+  else adjustCanvasDisplaySize(canvas.width, canvas.height);
+  updateFullscreenButton();
+});
+
+// Export the current canvas content as a JPEG and trigger a download.
+function exportCanvasAsJpeg() {
+  try {
+    const qualityEl = document.getElementById('exportQuality');
+    let q = 0.92;
+    if (qualityEl) {
+      const parsed = parseFloat(qualityEl.value);
+      if (!isNaN(parsed)) q = Math.max(0.1, Math.min(1, parsed));
+    }
+
+    // toDataURL will use the internal canvas resolution (good) and produce JPEG data.
+    const dataUrl = canvas.toDataURL('image/jpeg', q);
+    // Create a temporary link to download the image
+    const a = document.createElement('a');
+    const name = `canvas-export-${Date.now()}.jpg`;
+    a.href = dataUrl;
+    a.download = name;
+    // append to DOM to make click work in some browsers
+    document.body.appendChild(a);
+    a.click();
+    // cleanup
+    document.body.removeChild(a);
+    showProgress(`Exported ${name} (quality=${q})`);
+  } catch (err) {
+    console.error('Failed to export canvas as JPEG:', err);
+    showProgress('Error exporting JPEG. See console for details.');
+  }
+}
+
 // Wait for the image to load before drawing and reading pixels.
 imagee.onload = function () {
   // Make the canvas match the image size so coordinates align.
   canvas.width = imagee.width;
   canvas.height = imagee.height;
+
+  // adjust displayed canvas size for small images
+  adjustCanvasDisplaySize(imagee.width, imagee.height);
 
   ctx.drawImage(imagee, 0, 0);
   try {
@@ -411,6 +510,10 @@ function loadImageFromUrl(url) {
     canvas.width = imagee.width;
     canvas.height = imagee.height;
 
+    // If the image is very small, scale the displayed canvas (CSS) so it's easier to see
+    // without changing the internal pixel buffer (keeps drawing math the same).
+    adjustCanvasDisplaySize(imagee.width, imagee.height);
+
     ctx.drawImage(imagee, 0, 0);
     try {
       const Imagedata = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -507,6 +610,8 @@ window.addEventListener('DOMContentLoaded', () => {
   const urlInput = document.getElementById('imageUrl');
   const nextBtn = document.getElementById('nextCluster');
   const randomChk = document.getElementById('randomOrder');
+  const fsBtn = document.getElementById('fullscreenToggle');
+  const exportBtn = document.getElementById('exportJpeg');
 
   if (loadBtn) loadBtn.addEventListener('click', () => loadImageFromUrl(urlInput?.value || ''));
   if (startBtn) startBtn.addEventListener('click', startPrintingWithConfirmation);
@@ -530,4 +635,10 @@ window.addEventListener('DOMContentLoaded', () => {
     dominantOrder = [0, 1, 2];
     if (randomChk.checked) shuffleArray(dominantOrder);
   });
+  if (fsBtn) {
+    fsBtn.addEventListener('click', () => toggleFullScreen());
+    // initialize label correctly
+    updateFullscreenButton();
+  }
+  if (exportBtn) exportBtn.addEventListener('click', () => exportCanvasAsJpeg());
 });
