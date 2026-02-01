@@ -21,6 +21,11 @@ let indexOrder = null; // array of pixel indices
 let indexOrderPos = 0;
 // ordering for dominant passes (0=red,1=green,2=blue) so we can randomize pass order
 let dominantOrder = null;
+// Loop/erase state
+let loopEnabled = false;
+let isErasing = false;
+let eraseOrder = null;
+let eraseOrderPos = 0;
 
 // UI elements (populated after DOM is ready)
 const pixelsPerFrameEl = () => document.getElementById('pixelsPerFrame');
@@ -266,6 +271,116 @@ function exportCanvasAsJpeg() {
   }
 }
 
+// Build an ordered list of pixel indices to erase based on the current mode
+function buildEraseOrder(mode) {
+  if (!data) return [];
+  const totalPixels = Math.floor(data.length / 4);
+  const order = [];
+
+  if (mode === 'palette' && clusterLists) {
+    // flatten clusters in clusterOrder sequence
+    for (let ci = 0; ci < clusterLists.length; ci++) {
+      const idx = clusterOrder ? clusterOrder[ci] : ci;
+      const list = clusterLists[idx] || [];
+      for (let j = 0; j < list.length; j++) order.push(list[j]);
+    }
+  } else if (mode === 'dominant' && dominantLists) {
+    const dom = [dominantLists.red, dominantLists.green, dominantLists.blue];
+    const orderPass = dominantOrder ? dominantOrder : [0,1,2];
+    for (let pj = 0; pj < orderPass.length; pj++) {
+      const actual = orderPass[pj];
+      const list = dom[actual] || [];
+      for (let j = 0; j < list.length; j++) order.push(list[j]);
+    }
+  } else {
+    // linear modes: use indexOrder if present, otherwise sequential
+    if (indexOrder) for (let p = 0; p < indexOrder.length; p++) order.push(indexOrder[p]);
+    else for (let p = 0; p < totalPixels; p++) order.push(p);
+  }
+
+  return order;
+}
+
+// Called when a print finishes. If Loop is enabled, start erasing then restart.
+function handlePrinterComplete(mode) {
+  // refresh loopEnabled from DOM
+  loopEnabled = !!document.getElementById('loopEnabled')?.checked;
+  if (loopEnabled) {
+    // start erasing animation
+    startErasingThenRestart(mode);
+  } else {
+    showProgress(`Printing complete (${mode}).`);
+    console.log(`printer2d: complete (${mode})`);
+  }
+}
+
+function startErasingThenRestart(mode) {
+  if (!data) return;
+  if (isErasing) return;
+  isErasing = true;
+  eraseOrder = buildEraseOrder(mode);
+  eraseOrderPos = 0;
+
+  const pixelsPerFrame = () => parseInt(pixelsPerFrameEl()?.value || 10, 10) || 1;
+  const frameDelay = () => parseInt(frameDelayEl()?.value || 50, 10) || 50;
+
+  function eraseStep() {
+    if (!eraseOrder) {
+      isErasing = false;
+      return;
+    }
+    const toDraw = Math.min(pixelsPerFrame(), eraseOrder.length - eraseOrderPos);
+    for (let j = 0; j < toDraw; j++) {
+      const pixelIndex = eraseOrder[eraseOrderPos];
+      const x = pixelIndex % canvas.width;
+      const y = Math.floor(pixelIndex / canvas.width);
+      // erase to white background
+      ctx.fillStyle = 'white';
+      ctx.fillRect(x, y, 1, 1);
+      eraseOrderPos++;
+    }
+
+    if (eraseOrderPos >= eraseOrder.length) {
+      // finished erasing
+      isErasing = false;
+      // reset drawing state and restart printing if loop still enabled
+      loopEnabled = !!document.getElementById('loopEnabled')?.checked;
+      if (loopEnabled) {
+  // clear canvas fully to white to avoid artifacts
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+        i = 0;
+        dominantPass = 0;
+        dominantPos = 0;
+        clusterPass = 0;
+        clusterPos = 0;
+        // rebuild orders to respect current Random setting
+        buildIndexOrder();
+        if (clusterLists) {
+          clusterOrder = new Array(clusterLists.length);
+          for (let ci = 0; ci < clusterLists.length; ci++) clusterOrder[ci] = ci;
+          if (randomOrderEl()?.checked) shuffleArray(clusterOrder);
+          if (randomOrderEl()?.checked) clusterLists.forEach(list => shuffleArray(list));
+        }
+        dominantOrder = [0,1,2];
+        if (randomOrderEl()?.checked) shuffleArray(dominantOrder);
+        // small delay then start drawing
+        setTimeout(() => {
+          const initialDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
+          setTimeout(printer2d, initialDelay);
+        }, 50);
+      } else {
+        showProgress('Erasing complete. Loop disabled.');
+      }
+      return;
+    }
+
+    setTimeout(eraseStep, frameDelay());
+  }
+
+  eraseStep();
+}
+
 // Wait for the image to load before drawing and reading pixels.
 imagee.onload = function () {
   // Make the canvas match the image size so coordinates align.
@@ -275,6 +390,10 @@ imagee.onload = function () {
   // adjust displayed canvas size for small images
   adjustCanvasDisplaySize(imagee.width, imagee.height);
 
+  // ensure a white background under any transparent pixels
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // draw image on top
   ctx.drawImage(imagee, 0, 0);
   try {
     const Imagedata = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -344,18 +463,21 @@ function printer2d() {
   // Special handling for palette mode: draw only from the current cluster during this frame
   if (mode === 'palette' && clusterLists) {
     if (clusterPass >= clusterLists.length) {
-      console.log('printer2d: complete (palette)');
+      handlePrinterComplete('palette');
       return;
     }
     const clusterIdx = clusterOrder ? clusterOrder[clusterPass] : clusterPass;
     const currentList = clusterLists[clusterIdx];
     const remaining = currentList.length - clusterPos;
-    if (remaining <= 0) {
+      if (remaining <= 0) {
       // move to next cluster and finish this frame
       clusterPass++;
       clusterPos = 0;
       // if user wants the canvas cleared between clusters, do it now so next cluster appears alone
-      if (clearBetweenEl()?.checked) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (clearBetweenEl()?.checked) {
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
       // do not proceed to next cluster in the same frame
     } else {
       const toDraw = Math.min(pixelsPerFrame, remaining);
@@ -377,7 +499,7 @@ function printer2d() {
       if (mode === 'dominant' && dominantLists) {
         // if all passes done, complete
         if (dominantPass >= (dominantOrder ? dominantOrder.length : 3)) {
-          console.log('printer2d: complete (dominant)');
+          handlePrinterComplete('dominant');
           return;
         }
         const actualPass = dominantOrder ? dominantOrder[dominantPass] : dominantPass;
@@ -387,7 +509,7 @@ function printer2d() {
           dominantPass++;
           dominantPos = 0;
           if (dominantPass >= (dominantOrder ? dominantOrder.length : 3)) {
-            console.log('printer2d: complete (dominant)');
+            handlePrinterComplete('dominant');
             return;
           }
           continue; // proceed to next iteration to handle new pass
@@ -412,7 +534,7 @@ function printer2d() {
         // if we have an indexOrder, use it; otherwise fall back to sequential i
         if (indexOrder) {
           if (indexOrderPos >= indexOrder.length) {
-            console.log('printer2d: complete');
+            handlePrinterComplete('linear');
             return;
           }
           const pixelIndex = indexOrder[indexOrderPos];
@@ -433,7 +555,7 @@ function printer2d() {
         } else {
           // if we've consumed all data, stop
           if (i >= data.length) {
-            console.log('printer2d: complete');
+            handlePrinterComplete('linear');
             return;
           }
 
@@ -514,7 +636,11 @@ function loadImageFromUrl(url) {
     // without changing the internal pixel buffer (keeps drawing math the same).
     adjustCanvasDisplaySize(imagee.width, imagee.height);
 
-    ctx.drawImage(imagee, 0, 0);
+  // ensure a white background under any transparent pixels
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // draw image on top
+  ctx.drawImage(imagee, 0, 0);
     try {
       const Imagedata = ctx.getImageData(0, 0, canvas.width, canvas.height);
       data = Imagedata.data;
@@ -581,7 +707,9 @@ function startPrintingWithConfirmation() {
   if (!confirmed) return;
 
   // clear canvas and reset index then begin
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  // fill background with white before starting
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
   i = 0;
   dominantPass = 0;
   dominantPos = 0;
@@ -612,6 +740,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const randomChk = document.getElementById('randomOrder');
   const fsBtn = document.getElementById('fullscreenToggle');
   const exportBtn = document.getElementById('exportJpeg');
+  const loopChk = document.getElementById('loopEnabled');
 
   if (loadBtn) loadBtn.addEventListener('click', () => loadImageFromUrl(urlInput?.value || ''));
   if (startBtn) startBtn.addEventListener('click', startPrintingWithConfirmation);
@@ -620,7 +749,10 @@ window.addEventListener('DOMContentLoaded', () => {
     if (clusterLists && clusterPass < clusterLists.length) {
       clusterPass++;
       clusterPos = 0;
-      if (clearBetweenEl()?.checked) ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (clearBetweenEl()?.checked) {
+        ctx.fillStyle = 'white';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
     }
   });
   if (randomChk) randomChk.addEventListener('change', () => {
@@ -641,4 +773,11 @@ window.addEventListener('DOMContentLoaded', () => {
     updateFullscreenButton();
   }
   if (exportBtn) exportBtn.addEventListener('click', () => exportCanvasAsJpeg());
+  if (loopChk) {
+    // keep internal state in sync when user toggles the checkbox
+    loopChk.addEventListener('change', () => {
+      loopEnabled = !!loopChk.checked;
+    });
+    loopEnabled = !!loopChk.checked;
+  }
 });
