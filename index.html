@@ -33,13 +33,17 @@
             <option value="green">Green only</option>
             <option value="blue">Blue only</option>
             <option value="dominant">Dominant-color passes</option>
+            <option value="palette">Palette passes</option>
         </select>
         &nbsp;&nbsp;
+        <label for="paletteCount">Palette colors:</label>
+        <input id="paletteCount" type="number" min="2" max="64" value="20" style="width:60px">
         <label for="frameDelay">Frame delay (ms):</label>
         <input id="frameDelay" type="range" min="10" max="1000" value="50">
         <input id="frameDelayNumber" type="number" min="10" max="1000" value="50" style="width:70px">
         <div id="progress" style="margin-top:8px;font-family:monospace"></div>
     </div>
+    <h1>V:0.0.1</h1>
     <script src="index.js"></script>
 </body>
 </html>

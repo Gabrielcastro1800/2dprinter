@@ -9,6 +9,11 @@ let i = 0;
 let dominantLists = null; // { red: [...pixelIndex], green: [...], blue: [...] }
 let dominantPass = 0; // 0=red,1=green,2=blue
 let dominantPos = 0; // position inside current pass
+// For palette clustering
+let clusterLists = null; // array of arrays of pixel indices
+let clusterCenters = null; // array of [r,g,b]
+let clusterPass = 0;
+let clusterPos = 0;
 
 // UI elements (populated after DOM is ready)
 const pixelsPerFrameEl = () => document.getElementById('pixelsPerFrame');
@@ -17,6 +22,7 @@ const frameDelayEl = () => document.getElementById('frameDelay');
 const frameDelayNumberEl = () => document.getElementById('frameDelayNumber');
 const progressEl = () => document.getElementById('progress');
 const colorModeEl = () => document.getElementById('colorMode');
+const paletteCountEl = () => document.getElementById('paletteCount');
 
 function syncControls() {
   const s = pixelsPerFrameEl();
@@ -43,6 +49,101 @@ function showProgress(msg) {
   if (progressEl()) progressEl().textContent = msg;
 }
 
+// Compute k-means clusters for the image pixels (simple implementation).
+// This builds clusterLists (array of pixel index arrays) and clusterCenters.
+function computePaletteClusters(k) {
+  if (!data) return;
+  showProgress(`Computing ${k}-color palette (this may take a moment)...`);
+  const totalPixels = Math.floor(data.length / 4);
+  if (totalPixels === 0) return;
+
+  // Create a list of pixel vectors for sampling/initialization
+  const sampleLimit = Math.min(totalPixels, 50000);
+  const sampleStep = Math.max(1, Math.floor(totalPixels / sampleLimit));
+  const sampleIndices = [];
+  for (let p = 0; p < totalPixels; p += sampleStep) sampleIndices.push(p);
+
+  // initialize centers by picking k random samples (or first k if few)
+  clusterCenters = [];
+  for (let ci = 0; ci < k; ci++) {
+    const idx = sampleIndices[(ci * 997) % sampleIndices.length]; // deterministic-ish spread
+    const bi = idx * 4;
+    clusterCenters.push([data[bi], data[bi + 1], data[bi + 2]]);
+  }
+
+  const assignments = new Int32Array(totalPixels);
+  const maxIters = 12;
+  for (let iter = 0; iter < maxIters; iter++) {
+    // assignment pass
+    const sumsR = new Array(k).fill(0);
+    const sumsG = new Array(k).fill(0);
+    const sumsB = new Array(k).fill(0);
+    const counts = new Array(k).fill(0);
+
+    for (let p = 0; p < totalPixels; p++) {
+      const bi = p * 4;
+      const r = data[bi];
+      const g = data[bi + 1];
+      const b = data[bi + 2];
+
+      // find nearest center
+      let best = 0;
+      let bestDist = Infinity;
+      for (let ci = 0; ci < k; ci++) {
+        const c = clusterCenters[ci];
+        const dr = r - c[0];
+        const dg = g - c[1];
+        const db = b - c[2];
+        const d = dr * dr + dg * dg + db * db;
+        if (d < bestDist) {
+          bestDist = d;
+          best = ci;
+        }
+      }
+      assignments[p] = best;
+      sumsR[best] += r;
+      sumsG[best] += g;
+      sumsB[best] += b;
+      counts[best]++;
+    }
+
+    // update centers
+    let moved = 0;
+    for (let ci = 0; ci < k; ci++) {
+      if (counts[ci] === 0) {
+        // reinitialize empty cluster to a random sample
+        const idx = sampleIndices[(ci * 811) % sampleIndices.length];
+        const bi = idx * 4;
+        const old = clusterCenters[ci];
+        clusterCenters[ci] = [data[bi], data[bi + 1], data[bi + 2]];
+        if (old[0] !== clusterCenters[ci][0] || old[1] !== clusterCenters[ci][1] || old[2] !== clusterCenters[ci][2]) moved++;
+        continue;
+      }
+      const nr = Math.round(sumsR[ci] / counts[ci]);
+      const ng = Math.round(sumsG[ci] / counts[ci]);
+      const nb = Math.round(sumsB[ci] / counts[ci]);
+      const old = clusterCenters[ci];
+      if (old[0] !== nr || old[1] !== ng || old[2] !== nb) moved++;
+      clusterCenters[ci] = [nr, ng, nb];
+    }
+
+    if (moved === 0) break;
+  }
+
+  // Build clusterLists from final assignments
+  clusterLists = new Array(k);
+  for (let ci = 0; ci < k; ci++) clusterLists[ci] = [];
+  for (let p = 0; p < totalPixels; p++) {
+    const ci = assignments[p];
+    // push pixel index p
+    clusterLists[ci].push(p);
+  }
+
+  clusterPass = 0;
+  clusterPos = 0;
+  showProgress(`Palette computed: ${k} colors`);
+}
+
 // Wait for the image to load before drawing and reading pixels.
 imagee.onload = function () {
   // Make the canvas match the image size so coordinates align.
@@ -53,18 +154,24 @@ imagee.onload = function () {
   try {
     const Imagedata = ctx.getImageData(0, 0, canvas.width, canvas.height);
     data = Imagedata.data;
-    // Precompute dominant-color lists for the 'dominant' mode
-    dominantLists = { red: [], green: [], blue: [] };
-    const totalPixels = Math.floor(data.length / 4);
-    for (let p = 0; p < totalPixels; p++) {
-      const bi = p * 4;
-      const r = data[bi];
-      const g = data[bi + 1];
-      const b = data[bi + 2];
-      if (r >= g && r >= b) dominantLists.red.push(p);
-      else if (g >= r && g >= b) dominantLists.green.push(p);
-      else dominantLists.blue.push(p);
-    }
+      // Precompute dominant-color lists for the 'dominant' mode
+      dominantLists = { red: [], green: [], blue: [] };
+      const totalPixels = Math.floor(data.length / 4);
+      for (let p = 0; p < totalPixels; p++) {
+        const bi = p * 4;
+        const r = data[bi];
+        const g = data[bi + 1];
+        const b = data[bi + 2];
+        if (r >= g && r >= b) dominantLists.red.push(p);
+        else if (g >= r && g >= b) dominantLists.green.push(p);
+        else dominantLists.blue.push(p);
+      }
+      // compute palette clusters (number from UI, default 20)
+      const k2 = parseInt(paletteCountEl()?.value || 20, 10) || 20;
+      computePaletteClusters(k2);
+      // compute palette clusters (number from UI, default 20)
+      const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
+      computePaletteClusters(k);
   } catch (err) {
     console.error('Failed to read image pixel data (canvas tainted):', err);
     showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
