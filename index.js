@@ -307,6 +307,8 @@ function handlePrinterComplete(mode) {
   loopEnabled = !!document.getElementById('loopEnabled')?.checked;
   if (loopEnabled) {
     // start erasing animation
+    showProgress('Loop enabled — erasing then restarting...');
+    console.log('handlePrinterComplete: loop enabled, starting erase/restart');
     startErasingThenRestart(mode);
   } else {
     showProgress(`Printing complete (${mode}).`);
@@ -320,6 +322,34 @@ function startErasingThenRestart(mode) {
   isErasing = true;
   eraseOrder = buildEraseOrder(mode);
   eraseOrderPos = 0;
+
+  if (!eraseOrder || eraseOrder.length === 0) {
+    console.warn('startErasingThenRestart: eraseOrder is empty, performing full clear and restart.');
+    // fall back to clearing the canvas and restarting immediately
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    isErasing = false;
+    // reset state
+    i = 0;
+    dominantPass = 0;
+    dominantPos = 0;
+    clusterPass = 0;
+    clusterPos = 0;
+    buildIndexOrder();
+    if (clusterLists) {
+      clusterOrder = new Array(clusterLists.length);
+      for (let ci = 0; ci < clusterLists.length; ci++) clusterOrder[ci] = ci;
+      if (randomOrderEl()?.checked) shuffleArray(clusterOrder);
+      if (randomOrderEl()?.checked) clusterLists.forEach(list => shuffleArray(list));
+    }
+    dominantOrder = [0,1,2];
+    if (randomOrderEl()?.checked) shuffleArray(dominantOrder);
+    setTimeout(() => {
+      const initialDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
+      setTimeout(printer2d, initialDelay);
+    }, 50);
+    return;
+  }
 
   const pixelsPerFrame = () => parseInt(pixelsPerFrameEl()?.value || 10, 10) || 1;
   const frameDelay = () => parseInt(frameDelayEl()?.value || 50, 10) || 50;
