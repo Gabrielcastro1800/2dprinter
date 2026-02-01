@@ -203,91 +203,91 @@ function printer2d() {
   // read control values (allow user to change during runtime)
   const pixelsPerFrame = parseInt(pixelsPerFrameEl()?.value || 10, 10) || 1;
   const frameDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
+  const mode = colorModeEl()?.value || 'full';
 
-  for (let p = 0; p < pixelsPerFrame; p++) {
-    const mode = colorModeEl()?.value || 'full';
-
-    if (mode === 'palette' && clusterLists) {
-      // palette mode: print clusters one cluster (color) at a time
-      if (clusterPass >= clusterLists.length) {
-        console.log('printer2d: complete (palette)');
-        return;
+  // Special handling for palette mode: draw only from the current cluster during this frame
+  if (mode === 'palette' && clusterLists) {
+    if (clusterPass >= clusterLists.length) {
+      console.log('printer2d: complete (palette)');
+      return;
+    }
+    const currentList = clusterLists[clusterPass];
+    const remaining = currentList.length - clusterPos;
+    if (remaining <= 0) {
+      // move to next cluster and finish this frame
+      clusterPass++;
+      clusterPos = 0;
+      // do not proceed to next cluster in the same frame
+    } else {
+      const toDraw = Math.min(pixelsPerFrame, remaining);
+      for (let j = 0; j < toDraw; j++) {
+        const pixelIndex = currentList[clusterPos];
+        const bi = pixelIndex * 4;
+        const center = clusterCenters && clusterCenters[clusterPass] ? clusterCenters[clusterPass] : [data[bi], data[bi + 1], data[bi + 2]];
+        const x = pixelIndex % canvas.width;
+        const y = Math.floor(pixelIndex / canvas.width);
+        ctx.fillStyle = `rgb(${center[0]}, ${center[1]}, ${center[2]})`;
+        ctx.fillRect(x, y, 1, 1);
+        clusterPos++;
       }
-      const currentList = clusterLists[clusterPass];
-      if (clusterPos >= currentList.length) {
-        // next cluster/color
-        clusterPass++;
-        clusterPos = 0;
-        if (clusterPass >= clusterLists.length) {
-          console.log('printer2d: complete (palette)');
-          return;
-        }
-        continue;
-      }
-
-      const pixelIndex = currentList[clusterPos];
-      const bi = pixelIndex * 4;
-      // draw using the cluster center color so each pass is a single color
-      const center = clusterCenters && clusterCenters[clusterPass] ? clusterCenters[clusterPass] : [data[bi], data[bi + 1], data[bi + 2]];
-      const x = pixelIndex % canvas.width;
-      const y = Math.floor(pixelIndex / canvas.width);
-      ctx.fillStyle = `rgb(${center[0]}, ${center[1]}, ${center[2]})`;
-      ctx.fillRect(x, y, 1, 1);
-      clusterPos++;
-    } else if (mode === 'dominant' && dominantLists) {
-      // if all passes done, complete
-      if (dominantPass > 2) {
-        console.log('printer2d: complete (dominant)');
-        return;
-      }
-      const currentList = dominantPass === 0 ? dominantLists.red : dominantPass === 1 ? dominantLists.green : dominantLists.blue;
-      if (dominantPos >= currentList.length) {
-        // move to next pass
-        dominantPass++;
-        dominantPos = 0;
+    }
+  } else {
+    for (let p = 0; p < pixelsPerFrame; p++) {
+      if (mode === 'dominant' && dominantLists) {
+        // if all passes done, complete
         if (dominantPass > 2) {
           console.log('printer2d: complete (dominant)');
           return;
         }
-        continue; // proceed to next iteration to handle new pass
+        const currentList = dominantPass === 0 ? dominantLists.red : dominantPass === 1 ? dominantLists.green : dominantLists.blue;
+        if (dominantPos >= currentList.length) {
+          // move to next pass
+          dominantPass++;
+          dominantPos = 0;
+          if (dominantPass > 2) {
+            console.log('printer2d: complete (dominant)');
+            return;
+          }
+          continue; // proceed to next iteration to handle new pass
+        }
+
+        const pixelIndex = currentList[dominantPos];
+        const bi = pixelIndex * 4;
+        const r = data[bi];
+        const g = data[bi + 1];
+        const b = data[bi + 2];
+        const x = pixelIndex % canvas.width;
+        const y = Math.floor(pixelIndex / canvas.width);
+
+        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        ctx.fillRect(x, y, 1, 1);
+
+        dominantPos++;
+      } else {
+        // linear modes: full color or single channel
+        // if we've consumed all data, stop
+        if (i >= data.length) {
+          console.log('printer2d: complete');
+          return;
+        }
+
+        // each pixel has 4 bytes (r,g,b,a)
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const pixelIndex = Math.floor(i / 4);
+        const x = pixelIndex % canvas.width;
+        const y = Math.floor(pixelIndex / canvas.width);
+
+        if (mode === 'red') ctx.fillStyle = `rgb(${r},0,0)`;
+        else if (mode === 'green') ctx.fillStyle = `rgb(0,${g},0)`;
+        else if (mode === 'blue') ctx.fillStyle = `rgb(0,0,${b})`;
+        else ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+        ctx.fillRect(x, y, 1, 1);
+
+        i += 4; // advance by one pixel (4 bytes)
       }
-
-      const pixelIndex = currentList[dominantPos];
-      const bi = pixelIndex * 4;
-      const r = data[bi];
-      const g = data[bi + 1];
-      const b = data[bi + 2];
-      const x = pixelIndex % canvas.width;
-      const y = Math.floor(pixelIndex / canvas.width);
-
-      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-      ctx.fillRect(x, y, 1, 1);
-
-      dominantPos++;
-    } else {
-      // linear modes: full color or single channel
-      // if we've consumed all data, stop
-      if (i >= data.length) {
-        console.log('printer2d: complete');
-        return;
-      }
-
-      // each pixel has 4 bytes (r,g,b,a)
-      const r = data[i];
-      const g = data[i + 1];
-      const b = data[i + 2];
-      const pixelIndex = Math.floor(i / 4);
-      const x = pixelIndex % canvas.width;
-      const y = Math.floor(pixelIndex / canvas.width);
-
-      if (mode === 'red') ctx.fillStyle = `rgb(${r},0,0)`;
-      else if (mode === 'green') ctx.fillStyle = `rgb(0,${g},0)`;
-      else if (mode === 'blue') ctx.fillStyle = `rgb(0,0,${b})`;
-      else ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-
-      ctx.fillRect(x, y, 1, 1);
-
-      i += 4; // advance by one pixel (4 bytes)
     }
   }
 
