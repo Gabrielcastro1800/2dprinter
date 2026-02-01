@@ -14,6 +14,9 @@ let clusterLists = null; // array of arrays of pixel indices
 let clusterCenters = null; // array of [r,g,b]
 let clusterPass = 0;
 let clusterPos = 0;
+// For randomized linear order
+let indexOrder = null; // array of pixel indices
+let indexOrderPos = 0;
 
 // UI elements (populated after DOM is ready)
 const pixelsPerFrameEl = () => document.getElementById('pixelsPerFrame');
@@ -25,6 +28,7 @@ const colorModeEl = () => document.getElementById('colorMode');
 const paletteCountEl = () => document.getElementById('paletteCount');
 const clearBetweenEl = () => document.getElementById('clearBetween');
 const nextClusterBtn = () => document.getElementById('nextCluster');
+const randomOrderEl = () => document.getElementById('randomOrder');
 
 function syncControls() {
   const s = pixelsPerFrameEl();
@@ -146,6 +150,22 @@ function computePaletteClusters(k) {
   showProgress(`Palette computed: ${k} colors`);
 }
 
+function shuffleArray(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+  }
+}
+
+function buildIndexOrder() {
+  if (!data) return;
+  const totalPixels = Math.floor(data.length / 4);
+  indexOrder = new Array(totalPixels);
+  for (let p = 0; p < totalPixels; p++) indexOrder[p] = p;
+  if (randomOrderEl()?.checked) shuffleArray(indexOrder);
+  indexOrderPos = 0;
+}
+
 // Wait for the image to load before drawing and reading pixels.
 imagee.onload = function () {
   // Make the canvas match the image size so coordinates align.
@@ -171,6 +191,26 @@ imagee.onload = function () {
   // compute palette clusters (number from UI, default 20)
   const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
   computePaletteClusters(k);
+  // build linear index order (possibly randomized) and shuffle clusters/dominant lists if requested
+  buildIndexOrder();
+  if (randomOrderEl()?.checked) {
+    if (clusterLists) clusterLists.forEach(list => shuffleArray(list));
+    if (dominantLists) {
+      shuffleArray(dominantLists.red);
+      shuffleArray(dominantLists.green);
+      shuffleArray(dominantLists.blue);
+    }
+  }
+  // build linear index order (possibly randomized) and shuffle clusters/dominant lists if requested
+  buildIndexOrder();
+  if (randomOrderEl()?.checked) {
+    if (clusterLists) clusterLists.forEach(list => shuffleArray(list));
+    if (dominantLists) {
+      shuffleArray(dominantLists.red);
+      shuffleArray(dominantLists.green);
+      shuffleArray(dominantLists.blue);
+    }
+  }
   } catch (err) {
     console.error('Failed to read image pixel data (canvas tainted):', err);
     showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
@@ -268,28 +308,53 @@ function printer2d() {
         dominantPos++;
       } else {
         // linear modes: full color or single channel
-        // if we've consumed all data, stop
-        if (i >= data.length) {
-          console.log('printer2d: complete');
-          return;
+        // support optional randomized order via indexOrder
+        const totalPixels = Math.floor(data.length / 4);
+        // if we have an indexOrder, use it; otherwise fall back to sequential i
+        if (indexOrder) {
+          if (indexOrderPos >= indexOrder.length) {
+            console.log('printer2d: complete');
+            return;
+          }
+          const pixelIndex = indexOrder[indexOrderPos];
+          const bi = pixelIndex * 4;
+          const r = data[bi];
+          const g = data[bi + 1];
+          const b = data[bi + 2];
+          const x = pixelIndex % canvas.width;
+          const y = Math.floor(pixelIndex / canvas.width);
+
+          if (mode === 'red') ctx.fillStyle = `rgb(${r},0,0)`;
+          else if (mode === 'green') ctx.fillStyle = `rgb(0,${g},0)`;
+          else if (mode === 'blue') ctx.fillStyle = `rgb(0,0,${b})`;
+          else ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+          ctx.fillRect(x, y, 1, 1);
+          indexOrderPos++;
+        } else {
+          // if we've consumed all data, stop
+          if (i >= data.length) {
+            console.log('printer2d: complete');
+            return;
+          }
+
+          // each pixel has 4 bytes (r,g,b,a)
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const pixelIndex = Math.floor(i / 4);
+          const x = pixelIndex % canvas.width;
+          const y = Math.floor(pixelIndex / canvas.width);
+
+          if (mode === 'red') ctx.fillStyle = `rgb(${r},0,0)`;
+          else if (mode === 'green') ctx.fillStyle = `rgb(0,${g},0)`;
+          else if (mode === 'blue') ctx.fillStyle = `rgb(0,0,${b})`;
+          else ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+          ctx.fillRect(x, y, 1, 1);
+
+          i += 4; // advance by one pixel (4 bytes)
         }
-
-        // each pixel has 4 bytes (r,g,b,a)
-        const r = data[i];
-        const g = data[i + 1];
-        const b = data[i + 2];
-        const pixelIndex = Math.floor(i / 4);
-        const x = pixelIndex % canvas.width;
-        const y = Math.floor(pixelIndex / canvas.width);
-
-        if (mode === 'red') ctx.fillStyle = `rgb(${r},0,0)`;
-        else if (mode === 'green') ctx.fillStyle = `rgb(0,${g},0)`;
-        else if (mode === 'blue') ctx.fillStyle = `rgb(0,0,${b})`;
-        else ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-
-        ctx.fillRect(x, y, 1, 1);
-
-        i += 4; // advance by one pixel (4 bytes)
       }
     }
   }
@@ -314,7 +379,9 @@ function printer2d() {
       const currentPassProgress = (clusterPass < clusterLists.length ? clusterPos : 0);
       printed = doneCount + currentPassProgress;
     } else {
-      printed = Math.floor(i / 4);
+      // if randomized order is used, report progress by indexOrderPos
+      if (indexOrder) printed = indexOrderPos;
+      else printed = Math.floor(i / 4);
     }
     const pct = Math.floor((printed / total) * 100);
     progressEl().textContent = `printed ${printed}/${total} (${pct}%)`;
@@ -358,6 +425,16 @@ function loadImageFromUrl(url) {
       // compute palette clusters (number from UI, default 20)
       const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
       computePaletteClusters(k);
+      // build linear index order (possibly randomized) and shuffle clusters/dominant lists if requested
+      buildIndexOrder();
+      if (randomOrderEl()?.checked) {
+        if (clusterLists) clusterLists.forEach(list => shuffleArray(list));
+        if (dominantLists) {
+          shuffleArray(dominantLists.red);
+          shuffleArray(dominantLists.green);
+          shuffleArray(dominantLists.blue);
+        }
+      }
     } catch (err) {
       console.error('Failed to read image pixel data (canvas tainted):', err);
       showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
@@ -401,6 +478,8 @@ function startPrintingWithConfirmation() {
   dominantPos = 0;
   clusterPass = 0;
   clusterPos = 0;
+  // rebuild index order to respect current random setting and reset position
+  buildIndexOrder();
   const initialDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
   setTimeout(printer2d, initialDelay);
 }
@@ -412,6 +491,7 @@ window.addEventListener('DOMContentLoaded', () => {
   const startBtn = document.getElementById('startPrint');
   const urlInput = document.getElementById('imageUrl');
   const nextBtn = document.getElementById('nextCluster');
+  const randomChk = document.getElementById('randomOrder');
 
   if (loadBtn) loadBtn.addEventListener('click', () => loadImageFromUrl(urlInput?.value || ''));
   if (startBtn) startBtn.addEventListener('click', startPrintingWithConfirmation);
@@ -421,6 +501,16 @@ window.addEventListener('DOMContentLoaded', () => {
       clusterPass++;
       clusterPos = 0;
       if (clearBetweenEl()?.checked) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  });
+  if (randomChk) randomChk.addEventListener('change', () => {
+    // rebuild index order and reshuffle clusters if toggled
+    buildIndexOrder();
+    if (clusterLists && randomChk.checked) clusterLists.forEach(list => shuffleArray(list));
+    if (dominantLists && randomChk.checked) {
+      shuffleArray(dominantLists.red);
+      shuffleArray(dominantLists.green);
+      shuffleArray(dominantLists.blue);
     }
   });
 });
