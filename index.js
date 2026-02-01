@@ -14,9 +14,13 @@ let clusterLists = null; // array of arrays of pixel indices
 let clusterCenters = null; // array of [r,g,b]
 let clusterPass = 0;
 let clusterPos = 0;
+// ordering of clusters when in palette mode (so we can shuffle cluster order)
+let clusterOrder = null; // array of cluster indices, e.g. [2,0,1,...]
 // For randomized linear order
 let indexOrder = null; // array of pixel indices
 let indexOrderPos = 0;
+// ordering for dominant passes (0=red,1=green,2=blue) so we can randomize pass order
+let dominantOrder = null;
 
 // UI elements (populated after DOM is ready)
 const pixelsPerFrameEl = () => document.getElementById('pixelsPerFrame');
@@ -191,26 +195,20 @@ imagee.onload = function () {
   // compute palette clusters (number from UI, default 20)
   const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
   computePaletteClusters(k);
-  // build linear index order (possibly randomized) and shuffle clusters/dominant lists if requested
+  // build linear index order (possibly randomized)
   buildIndexOrder();
-  if (randomOrderEl()?.checked) {
-    if (clusterLists) clusterLists.forEach(list => shuffleArray(list));
-    if (dominantLists) {
-      shuffleArray(dominantLists.red);
-      shuffleArray(dominantLists.green);
-      shuffleArray(dominantLists.blue);
-    }
+  // prepare cluster and dominant ordering. clusterOrder controls which cluster
+  // index is used for each pass (so we can draw clusters in random sequence).
+  if (clusterLists) {
+    clusterOrder = new Array(clusterLists.length);
+    for (let ci = 0; ci < clusterLists.length; ci++) clusterOrder[ci] = ci;
+    if (randomOrderEl()?.checked) shuffleArray(clusterOrder);
+    // optionally shuffle pixels inside each cluster too
+    if (randomOrderEl()?.checked) clusterLists.forEach(list => shuffleArray(list));
   }
-  // build linear index order (possibly randomized) and shuffle clusters/dominant lists if requested
-  buildIndexOrder();
-  if (randomOrderEl()?.checked) {
-    if (clusterLists) clusterLists.forEach(list => shuffleArray(list));
-    if (dominantLists) {
-      shuffleArray(dominantLists.red);
-      shuffleArray(dominantLists.green);
-      shuffleArray(dominantLists.blue);
-    }
-  }
+  // prepare dominant pass order
+  dominantOrder = [0, 1, 2];
+  if (randomOrderEl()?.checked) shuffleArray(dominantOrder);
   } catch (err) {
     console.error('Failed to read image pixel data (canvas tainted):', err);
     showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
@@ -250,7 +248,8 @@ function printer2d() {
       console.log('printer2d: complete (palette)');
       return;
     }
-    const currentList = clusterLists[clusterPass];
+    const clusterIdx = clusterOrder ? clusterOrder[clusterPass] : clusterPass;
+    const currentList = clusterLists[clusterIdx];
     const remaining = currentList.length - clusterPos;
     if (remaining <= 0) {
       // move to next cluster and finish this frame
@@ -264,7 +263,7 @@ function printer2d() {
       for (let j = 0; j < toDraw; j++) {
         const pixelIndex = currentList[clusterPos];
         const bi = pixelIndex * 4;
-        const center = clusterCenters && clusterCenters[clusterPass] ? clusterCenters[clusterPass] : [data[bi], data[bi + 1], data[bi + 2]];
+        const center = clusterCenters && clusterCenters[clusterIdx] ? clusterCenters[clusterIdx] : [data[bi], data[bi + 1], data[bi + 2]];
         const x = pixelIndex % canvas.width;
         const y = Math.floor(pixelIndex / canvas.width);
         ctx.fillStyle = `rgb(${center[0]}, ${center[1]}, ${center[2]})`;
@@ -278,16 +277,17 @@ function printer2d() {
     for (let p = 0; p < pixelsPerFrame; p++) {
       if (mode === 'dominant' && dominantLists) {
         // if all passes done, complete
-        if (dominantPass > 2) {
+        if (dominantPass >= (dominantOrder ? dominantOrder.length : 3)) {
           console.log('printer2d: complete (dominant)');
           return;
         }
-        const currentList = dominantPass === 0 ? dominantLists.red : dominantPass === 1 ? dominantLists.green : dominantLists.blue;
+        const actualPass = dominantOrder ? dominantOrder[dominantPass] : dominantPass;
+        const currentList = actualPass === 0 ? dominantLists.red : actualPass === 1 ? dominantLists.green : dominantLists.blue;
         if (dominantPos >= currentList.length) {
           // move to next pass
           dominantPass++;
           dominantPos = 0;
-          if (dominantPass > 2) {
+          if (dominantPass >= (dominantOrder ? dominantOrder.length : 3)) {
             console.log('printer2d: complete (dominant)');
             return;
           }
@@ -365,17 +365,22 @@ function printer2d() {
     const total = Math.floor(data.length / 4);
     let printed = 0;
     if (mode === 'dominant' && dominantLists) {
-      const donePasses = Math.max(0, Math.min(3, dominantPass));
-      const doneCount = (donePasses >= 1 ? dominantLists.red.length : 0)
-        + (donePasses >= 2 ? dominantLists.green.length : 0)
-        + (donePasses >= 3 ? dominantLists.blue.length : 0);
-      // plus current pass progress
-      const currentPassProgress = (dominantPass <= 2 ? dominantPos : 0);
+      const domLists = [dominantLists.red, dominantLists.green, dominantLists.blue];
+      const passesDone = Math.max(0, Math.min(dominantPass, domLists.length));
+      let doneCount = 0;
+      for (let pj = 0; pj < passesDone; pj++) {
+        const actual = dominantOrder ? dominantOrder[pj] : pj;
+        doneCount += (domLists[actual] ? domLists[actual].length : 0);
+      }
+      const currentPassProgress = (dominantPass < domLists.length ? dominantPos : 0);
       printed = doneCount + currentPassProgress;
     } else if (mode === 'palette' && clusterLists) {
       // count clusters done plus current cluster progress
       let doneCount = 0;
-      for (let ci = 0; ci < clusterPass; ci++) doneCount += clusterLists[ci].length;
+      for (let ci = 0; ci < clusterPass; ci++) {
+        const idx = clusterOrder ? clusterOrder[ci] : ci;
+        doneCount += (clusterLists[idx] ? clusterLists[idx].length : 0);
+      }
       const currentPassProgress = (clusterPass < clusterLists.length ? clusterPos : 0);
       printed = doneCount + currentPassProgress;
     } else {
@@ -425,16 +430,17 @@ function loadImageFromUrl(url) {
       // compute palette clusters (number from UI, default 20)
       const k = parseInt(paletteCountEl()?.value || 20, 10) || 20;
       computePaletteClusters(k);
-      // build linear index order (possibly randomized) and shuffle clusters/dominant lists if requested
-      buildIndexOrder();
-      if (randomOrderEl()?.checked) {
-        if (clusterLists) clusterLists.forEach(list => shuffleArray(list));
-        if (dominantLists) {
-          shuffleArray(dominantLists.red);
-          shuffleArray(dominantLists.green);
-          shuffleArray(dominantLists.blue);
+        // build linear index order (possibly randomized)
+        buildIndexOrder();
+        // prepare cluster and dominant ordering for palette/dominant modes
+        if (clusterLists) {
+          clusterOrder = new Array(clusterLists.length);
+          for (let ci = 0; ci < clusterLists.length; ci++) clusterOrder[ci] = ci;
+          if (randomOrderEl()?.checked) shuffleArray(clusterOrder);
+          if (randomOrderEl()?.checked) clusterLists.forEach(list => shuffleArray(list));
         }
-      }
+        dominantOrder = [0, 1, 2];
+        if (randomOrderEl()?.checked) shuffleArray(dominantOrder);
     } catch (err) {
       console.error('Failed to read image pixel data (canvas tainted):', err);
       showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
@@ -480,6 +486,15 @@ function startPrintingWithConfirmation() {
   clusterPos = 0;
   // rebuild index order to respect current random setting and reset position
   buildIndexOrder();
+  // rebuild cluster/dominant ordering to respect current random setting
+  if (clusterLists) {
+    clusterOrder = new Array(clusterLists.length);
+    for (let ci = 0; ci < clusterLists.length; ci++) clusterOrder[ci] = ci;
+    if (randomOrderEl()?.checked) shuffleArray(clusterOrder);
+    if (randomOrderEl()?.checked) clusterLists.forEach(list => shuffleArray(list));
+  }
+  dominantOrder = [0,1,2];
+  if (randomOrderEl()?.checked) shuffleArray(dominantOrder);
   const initialDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
   setTimeout(printer2d, initialDelay);
 }
@@ -504,13 +519,15 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
   if (randomChk) randomChk.addEventListener('change', () => {
-    // rebuild index order and reshuffle clusters if toggled
+    // rebuild index order and reshuffle clusters/dominant pass order if toggled
     buildIndexOrder();
-    if (clusterLists && randomChk.checked) clusterLists.forEach(list => shuffleArray(list));
-    if (dominantLists && randomChk.checked) {
-      shuffleArray(dominantLists.red);
-      shuffleArray(dominantLists.green);
-      shuffleArray(dominantLists.blue);
+    if (clusterLists) {
+      clusterOrder = new Array(clusterLists.length);
+      for (let ci = 0; ci < clusterLists.length; ci++) clusterOrder[ci] = ci;
+      if (randomChk.checked) shuffleArray(clusterOrder);
+      if (randomChk.checked) clusterLists.forEach(list => shuffleArray(list));
     }
+    dominantOrder = [0, 1, 2];
+    if (randomChk.checked) shuffleArray(dominantOrder);
   });
 });
