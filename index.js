@@ -74,6 +74,10 @@ imagee.onload = function () {
   }
 
   // leave the canvas showing the image as a preview; enable Start button
+  // reset state for a fresh print
+  i = 0;
+  dominantPass = 0;
+  dominantPos = 0;
   syncControls();
   setStartEnabled(true);
   showProgress(`Image loaded: ${imagee.width}x${imagee.height}. Click Start printing to begin.`);
@@ -194,6 +198,18 @@ function loadImageFromUrl(url) {
     try {
       const Imagedata = ctx.getImageData(0, 0, canvas.width, canvas.height);
       data = Imagedata.data;
+      // Precompute dominant-color lists for the 'dominant' mode
+      dominantLists = { red: [], green: [], blue: [] };
+      const totalPixels = Math.floor(data.length / 4);
+      for (let p = 0; p < totalPixels; p++) {
+        const bi = p * 4;
+        const r = data[bi];
+        const g = data[bi + 1];
+        const b = data[bi + 2];
+        if (r >= g && r >= b) dominantLists.red.push(p);
+        else if (g >= r && g >= b) dominantLists.green.push(p);
+        else dominantLists.blue.push(p);
+      }
     } catch (err) {
       console.error('Failed to read image pixel data (canvas tainted):', err);
       showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
@@ -202,7 +218,11 @@ function loadImageFromUrl(url) {
     }
 
     // leave the canvas showing the image as a preview; enable Start button
-    syncControls();
+  // reset state for a fresh print
+  i = 0;
+  dominantPass = 0;
+  dominantPos = 0;
+  syncControls();
     setStartEnabled(true);
     showProgress(`Image loaded: ${imagee.width}x${imagee.height}. Click Start printing to begin.`);
   };
