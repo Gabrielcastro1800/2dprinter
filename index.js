@@ -185,6 +185,8 @@ imagee.onload = function () {
   i = 0;
   dominantPass = 0;
   dominantPos = 0;
+  clusterPass = 0;
+  clusterPos = 0;
   syncControls();
   setStartEnabled(true);
   showProgress(`Image loaded: ${imagee.width}x${imagee.height}. Click Start printing to begin.`);
@@ -205,7 +207,34 @@ function printer2d() {
   for (let p = 0; p < pixelsPerFrame; p++) {
     const mode = colorModeEl()?.value || 'full';
 
-    if (mode === 'dominant' && dominantLists) {
+    if (mode === 'palette' && clusterLists) {
+      // palette mode: print clusters one cluster (color) at a time
+      if (clusterPass >= clusterLists.length) {
+        console.log('printer2d: complete (palette)');
+        return;
+      }
+      const currentList = clusterLists[clusterPass];
+      if (clusterPos >= currentList.length) {
+        // next cluster/color
+        clusterPass++;
+        clusterPos = 0;
+        if (clusterPass >= clusterLists.length) {
+          console.log('printer2d: complete (palette)');
+          return;
+        }
+        continue;
+      }
+
+      const pixelIndex = currentList[clusterPos];
+      const bi = pixelIndex * 4;
+      // draw using the cluster center color so each pass is a single color
+      const center = clusterCenters && clusterCenters[clusterPass] ? clusterCenters[clusterPass] : [data[bi], data[bi + 1], data[bi + 2]];
+      const x = pixelIndex % canvas.width;
+      const y = Math.floor(pixelIndex / canvas.width);
+      ctx.fillStyle = `rgb(${center[0]}, ${center[1]}, ${center[2]})`;
+      ctx.fillRect(x, y, 1, 1);
+      clusterPos++;
+    } else if (mode === 'dominant' && dominantLists) {
       // if all passes done, complete
       if (dominantPass > 2) {
         console.log('printer2d: complete (dominant)');
@@ -274,6 +303,12 @@ function printer2d() {
         + (donePasses >= 3 ? dominantLists.blue.length : 0);
       // plus current pass progress
       const currentPassProgress = (dominantPass <= 2 ? dominantPos : 0);
+      printed = doneCount + currentPassProgress;
+    } else if (mode === 'palette' && clusterLists) {
+      // count clusters done plus current cluster progress
+      let doneCount = 0;
+      for (let ci = 0; ci < clusterPass; ci++) doneCount += clusterLists[ci].length;
+      const currentPassProgress = (clusterPass < clusterLists.length ? clusterPos : 0);
       printed = doneCount + currentPassProgress;
     } else {
       printed = Math.floor(i / 4);
@@ -358,6 +393,8 @@ function startPrintingWithConfirmation() {
   i = 0;
   dominantPass = 0;
   dominantPos = 0;
+  clusterPass = 0;
+  clusterPos = 0;
   const initialDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
   setTimeout(printer2d, initialDelay);
 }
