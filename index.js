@@ -411,7 +411,16 @@ window.addEventListener('DOMContentLoaded', () => {
   const loadBtn = document.getElementById('loadImage');
   const startBtn = document.getElementById('startPrint');
   const urlInput = document.getElementById('imageUrl');
+  const nextBtn = document.getElementById('nextCluster');
 
   if (loadBtn) loadBtn.addEventListener('click', () => loadImageFromUrl(urlInput?.value || ''));
   if (startBtn) startBtn.addEventListener('click', startPrintingWithConfirmation);
+  if (nextBtn) nextBtn.addEventListener('click', () => {
+    // advance to next cluster manually
+    if (clusterLists && clusterPass < clusterLists.length) {
+      clusterPass++;
+      clusterPos = 0;
+      if (clearBetweenEl()?.checked) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+  });
 });
