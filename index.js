@@ -237,8 +237,15 @@ function updateFullscreenButton() {
 
 // keep button label in sync when user exits with ESC or other means
 document.addEventListener('fullscreenchange', () => {
-  if (isFullScreen()) fitCanvasToScreen();
-  else adjustCanvasDisplaySize(canvas.width, canvas.height);
+  if (isFullScreen()) {
+    // use nearest-neighbor scaling when fullscreen so the upscaled canvas stays sharp
+    try { canvas.style.imageRendering = 'pixelated'; } catch (e) {}
+    fitCanvasToScreen();
+  } else {
+    // restore default image-rendering and scaled display size
+    try { canvas.style.imageRendering = ''; } catch (e) {}
+    adjustCanvasDisplaySize(canvas.width, canvas.height);
+  }
   updateFullscreenButton();
 });
 
