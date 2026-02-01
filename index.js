@@ -5,6 +5,10 @@ let imagee = new Image();
 
 let data = null;
 let i = 0;
+// For dominant-color passes
+let dominantLists = null; // { red: [...pixelIndex], green: [...], blue: [...] }
+let dominantPass = 0; // 0=red,1=green,2=blue
+let dominantPos = 0; // position inside current pass
 
 // UI elements (populated after DOM is ready)
 const pixelsPerFrameEl = () => document.getElementById('pixelsPerFrame');
@@ -12,6 +16,7 @@ const pixelsPerFrameNumberEl = () => document.getElementById('pixelsPerFrameNumb
 const frameDelayEl = () => document.getElementById('frameDelay');
 const frameDelayNumberEl = () => document.getElementById('frameDelayNumber');
 const progressEl = () => document.getElementById('progress');
+const colorModeEl = () => document.getElementById('colorMode');
 
 function syncControls() {
   const s = pixelsPerFrameEl();
@@ -48,6 +53,18 @@ imagee.onload = function () {
   try {
     const Imagedata = ctx.getImageData(0, 0, canvas.width, canvas.height);
     data = Imagedata.data;
+    // Precompute dominant-color lists for the 'dominant' mode
+    dominantLists = { red: [], green: [], blue: [] };
+    const totalPixels = Math.floor(data.length / 4);
+    for (let p = 0; p < totalPixels; p++) {
+      const bi = p * 4;
+      const r = data[bi];
+      const g = data[bi + 1];
+      const b = data[bi + 2];
+      if (r >= g && r >= b) dominantLists.red.push(p);
+      else if (g >= r && g >= b) dominantLists.green.push(p);
+      else dominantLists.blue.push(p);
+    }
   } catch (err) {
     console.error('Failed to read image pixel data (canvas tainted):', err);
     showProgress('Error: canvas was tainted by a cross-origin image. Make sure the image is served from the same origin or that the image server sets Access-Control-Allow-Origin headers.');
@@ -75,30 +92,81 @@ function printer2d() {
   const frameDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
 
   for (let p = 0; p < pixelsPerFrame; p++) {
-    // if we've consumed all data, stop
-    if (i >= data.length) {
-      console.log('printer2d: complete');
-      return;
+    const mode = colorModeEl()?.value || 'full';
+
+    if (mode === 'dominant' && dominantLists) {
+      // if all passes done, complete
+      if (dominantPass > 2) {
+        console.log('printer2d: complete (dominant)');
+        return;
+      }
+      const currentList = dominantPass === 0 ? dominantLists.red : dominantPass === 1 ? dominantLists.green : dominantLists.blue;
+      if (dominantPos >= currentList.length) {
+        // move to next pass
+        dominantPass++;
+        dominantPos = 0;
+        if (dominantPass > 2) {
+          console.log('printer2d: complete (dominant)');
+          return;
+        }
+        continue; // proceed to next iteration to handle new pass
+      }
+
+      const pixelIndex = currentList[dominantPos];
+      const bi = pixelIndex * 4;
+      const r = data[bi];
+      const g = data[bi + 1];
+      const b = data[bi + 2];
+      const x = pixelIndex % canvas.width;
+      const y = Math.floor(pixelIndex / canvas.width);
+
+      ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+      ctx.fillRect(x, y, 1, 1);
+
+      dominantPos++;
+    } else {
+      // linear modes: full color or single channel
+      // if we've consumed all data, stop
+      if (i >= data.length) {
+        console.log('printer2d: complete');
+        return;
+      }
+
+      // each pixel has 4 bytes (r,g,b,a)
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const pixelIndex = Math.floor(i / 4);
+      const x = pixelIndex % canvas.width;
+      const y = Math.floor(pixelIndex / canvas.width);
+
+      if (mode === 'red') ctx.fillStyle = `rgb(${r},0,0)`;
+      else if (mode === 'green') ctx.fillStyle = `rgb(0,${g},0)`;
+      else if (mode === 'blue') ctx.fillStyle = `rgb(0,0,${b})`;
+      else ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+      ctx.fillRect(x, y, 1, 1);
+
+      i += 4; // advance by one pixel (4 bytes)
     }
-
-    // each pixel has 4 bytes (r,g,b,a)
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    const pixelIndex = Math.floor(i / 4);
-    const x = pixelIndex % canvas.width;
-    const y = Math.floor(pixelIndex / canvas.width);
-
-    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
-    ctx.fillRect(x, y, 1, 1);
-
-    i += 4; // advance by one pixel (4 bytes)
   }
 
   // update progress
   if (progressEl()) {
-    const printed = Math.floor(i / 4);
+    const mode = colorModeEl()?.value || 'full';
     const total = Math.floor(data.length / 4);
+    let printed = 0;
+    if (mode === 'dominant' && dominantLists) {
+      const donePasses = Math.max(0, Math.min(3, dominantPass));
+      const doneCount = (donePasses >= 1 ? dominantLists.red.length : 0)
+        + (donePasses >= 2 ? dominantLists.green.length : 0)
+        + (donePasses >= 3 ? dominantLists.blue.length : 0);
+      // plus current pass progress
+      const currentPassProgress = (dominantPass <= 2 ? dominantPos : 0);
+      printed = doneCount + currentPassProgress;
+    } else {
+      printed = Math.floor(i / 4);
+    }
     const pct = Math.floor((printed / total) * 100);
     progressEl().textContent = `printed ${printed}/${total} (${pct}%)`;
   }
@@ -161,6 +229,8 @@ function startPrintingWithConfirmation() {
   // clear canvas and reset index then begin
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   i = 0;
+  dominantPass = 0;
+  dominantPos = 0;
   const initialDelay = parseInt(frameDelayEl()?.value || 50, 10) || 50;
   setTimeout(printer2d, initialDelay);
 }

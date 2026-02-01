@@ -26,6 +26,15 @@
         <input id="pixelsPerFrame" type="range" min="1" max="100" value="10">
         <input id="pixelsPerFrameNumber" type="number" min="1" max="100" value="10" style="width:60px">
         &nbsp;&nbsp;
+        <label for="colorMode" style="margin-left:12px">Color mode:</label>
+        <select id="colorMode">
+            <option value="full">Full color</option>
+            <option value="red">Red only</option>
+            <option value="green">Green only</option>
+            <option value="blue">Blue only</option>
+            <option value="dominant">Dominant-color passes</option>
+        </select>
+        &nbsp;&nbsp;
         <label for="frameDelay">Frame delay (ms):</label>
         <input id="frameDelay" type="range" min="10" max="1000" value="50">
         <input id="frameDelayNumber" type="number" min="10" max="1000" value="50" style="width:70px">
